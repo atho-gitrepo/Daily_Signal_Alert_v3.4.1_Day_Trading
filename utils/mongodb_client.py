@@ -1,11 +1,12 @@
 """
 MongoDB Client for Trading Bot - Super TDI + MACD + Super BB Strategy
-Version: 3.4.1 - FIXED: Database object truth value testing error
+Version: 3.4.5 - FIXED: Added pandas import for convert_numpy_types
 """
 
 import os
 import logging
 import time
+import pandas as pd  # ← CRITICAL: Added pandas import
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import json
@@ -38,32 +39,52 @@ EMOJI = {
 
 def convert_numpy_types(obj):
     """
-    Recursively convert numpy types to Python native types for MongoDB serialization.
+    Recursively convert numpy/pandas types to Python native types for MongoDB serialization.
     """
     import numpy as np
 
+    # Handle None
+    if obj is None:
+        return None
+
+    # Handle dict
     if isinstance(obj, dict):
         return {k: convert_numpy_types(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
+
+    # Handle list or tuple
+    if isinstance(obj, (list, tuple)):
         return [convert_numpy_types(item) for item in obj]
-    elif isinstance(obj, tuple):
-        return tuple(convert_numpy_types(item) for item in obj)
-    elif isinstance(obj, np.bool_):
+
+    # Handle numpy types
+    if isinstance(obj, np.bool_):
         return bool(obj)
-    elif isinstance(obj, np.int_):
+    if isinstance(obj, np.integer):
         return int(obj)
-    elif isinstance(obj, np.float_):
+    if isinstance(obj, np.floating):
         return float(obj)
-    elif isinstance(obj, np.ndarray):
+    if isinstance(obj, np.ndarray):
         return obj.tolist()
-    elif isinstance(obj, np.datetime64):
+    if isinstance(obj, np.datetime64):
         return obj.astype(datetime)
-    elif isinstance(obj, pd.Series):
+
+    # Handle pandas types (NOW WORKS because pd is imported)
+    if isinstance(obj, pd.Series):
         return obj.tolist()
-    elif isinstance(obj, pd.DataFrame):
+    if isinstance(obj, pd.DataFrame):
         return obj.to_dict('records')
-    else:
+
+    # Handle Python types
+    if isinstance(obj, bool):
         return obj
+    if isinstance(obj, (int, float)):
+        return obj
+    if isinstance(obj, str):
+        return obj
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+
+    # Return as-is for other types
+    return obj
 
 
 class MongoDBClient:
@@ -79,7 +100,7 @@ class MongoDBClient:
 
         # Load config
         self.uri = self._get_uri()
-        self.db_name = os.getenv("MONGODB_DB", os.getenv("MONGO_DB", "trading_bot_dca"))
+        self.db_name = os.getenv("MONGODB_DB", os.getenv("MONGO_DB", "trading_bot"))
         self.active_collection = os.getenv("MONGODB_ACTIVE_COLLECTION", "active_signals")
         self.resolved_collection = os.getenv("MONGODB_RESOLVED_COLLECTION", "resolved_signals")
         self.archive_collection = os.getenv("MONGODB_ARCHIVE_COLLECTION", "archive_signals")
@@ -162,7 +183,6 @@ class MongoDBClient:
 
     def _create_indexes(self):
         """Create indexes for collections."""
-        # FIXED: Check if db exists using 'is not None' instead of truth value
         if not self._connected or self.db is None:
             return
 
@@ -202,7 +222,7 @@ class MongoDBClient:
             return None
 
         try:
-            # Convert numpy types to Python types
+            # Convert numpy/pandas types to Python types
             cleaned_data = convert_numpy_types(signal_data)
 
             # Add timestamp
@@ -211,11 +231,13 @@ class MongoDBClient:
             collection = self.db[self.active_collection]
             result = collection.insert_one(cleaned_data)
 
-            logger.debug(f"{EMOJI['DB']} MONGODB: Signal saved - ID: {result.inserted_id}")
+            logger.info(f"{EMOJI['DB']} MONGODB: Signal saved - ID: {result.inserted_id}")
             return str(result.inserted_id)
 
         except Exception as e:
             logger.error(f"{EMOJI['ERROR']} MONGODB_SAVE: Failed - {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def update_signal_status(self, doc_id: str, status: str, update_data: Dict[str, Any]) -> bool:
@@ -236,7 +258,7 @@ class MongoDBClient:
         try:
             from bson.objectid import ObjectId
 
-            # Convert numpy types
+            # Convert numpy/pandas types
             cleaned_update = convert_numpy_types(update_data)
             cleaned_update['status'] = status
             cleaned_update['updated_at'] = datetime.now()
@@ -258,7 +280,7 @@ class MongoDBClient:
                     resolved_col.insert_one(doc)
                     collection.delete_one({"_id": ObjectId(doc_id)})
 
-                logger.debug(f"{EMOJI['DB']} MONGODB: Signal {doc_id} updated to {status}")
+                logger.info(f"{EMOJI['DB']} MONGODB: Signal {doc_id} updated to {status}")
                 return True
 
             return False
@@ -268,15 +290,7 @@ class MongoDBClient:
             return False
 
     def get_active_signals(self, symbol: Optional[str] = None) -> List[Dict]:
-        """
-        Get active signals.
-
-        Args:
-            symbol: Optional symbol filter
-
-        Returns:
-            List of active signals
-        """
+        """Get active signals."""
         if not self.is_available():
             return []
 
@@ -294,16 +308,7 @@ class MongoDBClient:
             return []
 
     def get_resolved_signals(self, symbol: Optional[str] = None, limit: int = 100) -> List[Dict]:
-        """
-        Get resolved signals.
-
-        Args:
-            symbol: Optional symbol filter
-            limit: Maximum number of results
-
-        Returns:
-            List of resolved signals
-        """
+        """Get resolved signals."""
         if not self.is_available():
             return []
 
@@ -321,15 +326,7 @@ class MongoDBClient:
             return []
 
     def delete_active_signal(self, symbol: str) -> bool:
-        """
-        Delete active signal for a symbol.
-
-        Args:
-            symbol: Symbol to delete
-
-        Returns:
-            True if successful
-        """
+        """Delete active signal for a symbol."""
         if not self.is_available():
             return False
 
@@ -343,12 +340,7 @@ class MongoDBClient:
             return False
 
     def clear_all_active(self) -> int:
-        """
-        Clear all active signals.
-
-        Returns:
-            Number of deleted documents
-        """
+        """Clear all active signals."""
         if not self.is_available():
             return 0
 
