@@ -402,11 +402,12 @@ def check_active_signals():
                 if telegram_bot is not None and telegram_bot.enabled:
                     try:
                         status_emoji = "💰" if status == "PROFIT" else "💸" if status == "LOSS" else "⚖️" if status == "BREAK_EVEN" else "⏰"
+                        result_score = getattr(updated, 'total_score', getattr(updated, 'quality_score', 0))
 
                         telegram_bot.send_result(
                             symbol=symbol,
-                            signal_type=signal.get('signal_type', 'UNKNOWN'),
-                            entry_price=signal.get('entry_price', 0),
+                            signal_type=getattr(signal, 'signal_type', 'UNKNOWN'),
+                            entry_price=getattr(signal, 'entry_price', 0),
                             exit_price=current_price,
                             pnl=updated.pnl,
                             pnl_percent=updated.pnl_percent,
@@ -418,7 +419,7 @@ def check_active_signals():
                             rrr=updated.rrr,
                             signal_strength=updated.signal_strength,
                             risk_multiplier=updated.risk_multiplier,
-                            total_score=updated.total_score,
+                            total_score=result_score,
                             grade=updated.grade,
                             conditions_met=getattr(updated, 'conditions_met', 0),
                             conditions_total=getattr(updated, 'conditions_total', 5),
