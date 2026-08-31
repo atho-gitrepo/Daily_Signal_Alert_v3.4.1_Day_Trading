@@ -101,6 +101,7 @@ class SignalData:
 
     # Quality
     quality_score: int = 50
+    total_score: int = 0
     grade: str = ""
 
     # AI
@@ -147,6 +148,7 @@ class SignalData:
             "macd_histogram": self.macd_histogram,
             "conditions_met": self.conditions_met,
             "quality_score": self.quality_score,
+            "total_score": self.total_score if self.total_score else self.quality_score,
             "grade": self.grade,
             "rrr": self.rrr,
             "signal_strength": self.signal_strength,
@@ -302,6 +304,7 @@ class SignalManager:
 
                 # Quality
                 quality_score=quality_score,
+                total_score=quality_score,
                 grade=grade,
 
                 # Risk
@@ -456,6 +459,9 @@ class SignalManager:
             signal.pnl = exit_price - signal.entry_price
         else:
             signal.pnl = signal.entry_price - exit_price
+
+        if getattr(signal, "total_score", 0) == 0:
+            signal.total_score = signal.quality_score
 
         # Fees
         fee = signal.entry_price * 0.0011 + exit_price * 0.0011
