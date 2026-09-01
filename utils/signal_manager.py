@@ -5,12 +5,12 @@ ALIGNED WITH YOUR MANUAL STRATEGY:
 - EXIT: BUY → TDI 70, SELL → TDI 30
 - TP/SL: Always priority
 - Max hold: Force exit
-Version: 3.4.1 - FIXED: Added missing pandas import
+Version: 3.4.5 - FIXED: Duplicate prevention with database sync
 """
 
 import logging
 import time
-import pandas as pd  # ← ADD THIS IMPORT
+import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Any, Tuple, List
 from dataclasses import dataclass, field
@@ -49,7 +49,7 @@ class TradeLifecycle(str, Enum):
     CLOSED = "CLOSED"
     REJECTED = "REJECTED"
     EXPIRED = "EXPIRED"
-    EXIT_TARGET = "EXIT_TARGET"  # TDI reached target (70 for BUY, 30 for SELL)
+    EXIT_TARGET = "EXIT_TARGET"
     EXIT_1H = "EXIT_1H"
 
 
@@ -78,7 +78,7 @@ class SignalData:
 
     # YOUR strategy specific
     entry_tdi: float = 0.0
-    target_tdi: float = 0.0  # 70 for BUY, 30 for SELL
+    target_tdi: float = 0.0
     strategy_type: str = "REVERSAL_TO_TARGET"
 
     # BB fields
@@ -122,6 +122,7 @@ class SignalData:
     lowest_price: Optional[float] = None
     db_doc_id: Optional[str] = None
     last_checked_at: Optional[str] = None
+    restored_from_db: bool = False
 
     def to_dict(self) -> Dict:
         return {
@@ -152,6 +153,7 @@ class SignalData:
             "grade": self.grade,
             "rrr": self.rrr,
             "signal_strength": self.signal_strength,
+            "restored_from_db": self.restored_from_db,
         }
 
     def get_age_minutes(self) -> float:
@@ -171,13 +173,7 @@ class SignalData:
 
 class SignalManager:
     """
-    Signal Manager aligned with YOUR actual strategy.
-
-    YOUR STRATEGY:
-    - BUY: Enter TDI below 50 → Exit at TDI 70
-    - SELL: Enter TDI above 50 → Exit at TDI 30
-    - TP/SL: Always priority
-    - Max hold: Force exit
+    Signal Manager with proper duplicate prevention.
     """
 
     def __init__(self):
@@ -195,8 +191,8 @@ class SignalManager:
         # Exit settings (YOUR STRATEGY)
         self.MAX_HOLD_MINUTES = 60
         self.MIN_HOLD_MINUTES = 15
-        self.BUY_EXIT_TARGET = 70.0   # TDI target for BUY
-        self.SELL_EXIT_TARGET = 30.0  # TDI target for SELL
+        self.BUY_EXIT_TARGET = 70.0
+        self.SELL_EXIT_TARGET = 30.0
 
         # Grade thresholds
         self.GRADE_A_THRESHOLD = 80
@@ -207,12 +203,10 @@ class SignalManager:
         self.db_client = db_client
         self.db_enabled = self.db_client is not None and self.db_client.is_available() if self.db_client is not None else False
 
-        logger.info(f"✅ SIGNAL_MANAGER v3.4.4: Initialized")
+        logger.info(f"✅ SIGNAL_MANAGER v3.4.5: Initialized")
         logger.info(f"  - Strategy: BUY → TDI 70, SELL → TDI 30")
         logger.info(f"  - Max Hold: {self.MAX_HOLD_MINUTES} minutes")
-        logger.info(f"  - Min Hold: {self.MIN_HOLD_MINUTES} minutes")
-        logger.info(f"  - Grade A+: 90+ | A: 80+ | B+: 72+ | B: 60+ | C: 50+")
-        logger.info(f"  - Min Signal Score: {self.MIN_SIGNAL_SCORE}")
+        logger.info(f"  - DB Enabled: {self.db_enabled}")
 
     def _get_grade(self, score: int) -> str:
         if score >= 90:
@@ -228,19 +222,118 @@ class SignalManager:
         else:
             return "D"
 
+    def _recover_from_db(self, symbol: str) -> Optional[SignalData]:
+        """Recover an active signal from database."""
+        if not self.db_enabled:
+            return None
+
+        try:
+            db_signal = self.db_client.get_active_signal_by_symbol(symbol)
+            if not db_signal:
+                return None
+
+            # Create SignalData from DB record
+            signal = SignalData(
+                symbol=db_signal.get('symbol', symbol),
+                signal_type=db_signal.get('signal_type', 'UNKNOWN'),
+                entry_price=db_signal.get('entry_price', 0),
+                entry_time=db_signal.get('entry_time', datetime.now().isoformat()),
+                stop_loss=db_signal.get('stop_loss', 0),
+                take_profit=db_signal.get('take_profit', 0),
+                confidence=db_signal.get('confidence', 0.5),
+                status=db_signal.get('status', 'ACTIVE'),
+                exit_price=db_signal.get('exit_price'),
+                exit_time=db_signal.get('exit_time'),
+                pnl=db_signal.get('pnl', 0.0),
+                pnl_percent=db_signal.get('pnl_percent', 0.0),
+                fees=db_signal.get('fees', 0.0),
+                tdi_level=db_signal.get('tdi_level', 50),
+                tdi_zone=db_signal.get('tdi_zone', 'NEUTRAL'),
+                entry_tdi=db_signal.get('entry_tdi', 50),
+                target_tdi=db_signal.get('target_tdi', 50),
+                conditions_met=db_signal.get('conditions_met', 0),
+                conditions_total=db_signal.get('conditions_total', 4),
+                quality_score=db_signal.get('quality_score', 50),
+                total_score=db_signal.get('total_score', 50),
+                grade=db_signal.get('grade', ''),
+                rrr=db_signal.get('rrr', 0),
+                signal_strength=db_signal.get('signal_strength', 'SOFT'),
+                db_doc_id=str(db_signal.get('_id', '')),
+                restored_from_db=True,
+            )
+
+            self.active_signals[symbol] = signal
+            logger.info(f"{EMOJI['RESTORE']} Recovered {symbol} from DB (doc: {signal.db_doc_id})")
+            return signal
+
+        except Exception as e:
+            logger.warning(f"{EMOJI['WARNING']} Failed to recover {symbol} from DB: {e}")
+            return None
+
+    def sync_with_database(self):
+        """Sync active signals with database on startup."""
+        if not self.db_enabled:
+            return
+
+        try:
+            db_signals = self.db_client.get_active_signals()
+            if not db_signals:
+                logger.info(f"{EMOJI['INFO']} No active signals in database to sync")
+                return
+
+            recovered_count = 0
+            for doc_id, db_signal in db_signals.items():
+                symbol = db_signal.get('symbol')
+                if not symbol:
+                    continue
+
+                # Skip if already in memory
+                if symbol in self.active_signals:
+                    continue
+
+                # Recover the signal
+                signal = self._recover_from_db(symbol)
+                if signal:
+                    recovered_count += 1
+
+            if recovered_count > 0:
+                logger.info(f"{EMOJI['SUCCESS']} Synced {recovered_count} active signals from database")
+
+        except Exception as e:
+            logger.error(f"{EMOJI['ERROR']} Sync failed: {e}")
+
     def is_symbol_locked(self, symbol: str) -> bool:
+        """Check if symbol is locked (in memory)."""
+        # Check memory
         if symbol in self.active_signals:
             signal = self.active_signals[symbol]
             if signal.status == "ACTIVE":
                 return True
             else:
                 del self.active_signals[symbol]
+
+        # Check database as fallback
+        if self.db_enabled:
+            try:
+                db_signal = self.db_client.get_active_signal_by_symbol(symbol)
+                if db_signal:
+                    # Recover to memory
+                    self._recover_from_db(symbol)
+                    return True
+            except Exception as e:
+                logger.debug(f"DB check error for {symbol}: {e}")
+
         return False
 
     def lock_symbol(self, symbol: str, signal_type: str, entry_price: float,
                     raw_data: Dict, **kwargs) -> bool:
-        """Lock a symbol with a new signal."""
+        """Lock a symbol with a new signal - with duplicate prevention."""
         try:
+            # ===== STEP 1: Check memory lock =====
+            if self.is_symbol_locked(symbol):
+                logger.warning(f"{EMOJI['REJECT']} {symbol} already locked")
+                return False
+
             quality_score = raw_data.get('quality_score', 0)
             grade = self._get_grade(quality_score)
 
@@ -263,7 +356,20 @@ class SignalManager:
                 logger.warning(f"{EMOJI['REJECT']} Global limit: {self.MAX_SIGNALS_PER_HOUR}/hour")
                 return False
 
-            # Create signal
+            # ===== STEP 2: Double-check database =====
+            if self.db_enabled:
+                try:
+                    db_signal = self.db_client.get_active_signal_by_symbol(symbol)
+                    if db_signal:
+                        logger.warning(f"{EMOJI['REJECT']} {symbol} has active signal in DB: {db_signal.get('_id')}")
+                        self._recover_from_db(symbol)
+                        return False
+                except Exception as e:
+                    logger.warning(f"{EMOJI['WARNING']} DB check failed: {e}")
+
+            # ===== STEP 3: Create signal =====
+            target_tdi = self.BUY_EXIT_TARGET if signal_type == "BUY" else self.SELL_EXIT_TARGET
+
             signal = SignalData(
                 symbol=symbol,
                 signal_type=signal_type,
@@ -272,65 +378,54 @@ class SignalManager:
                 stop_loss=raw_data.get('stop_loss', 0),
                 take_profit=raw_data.get('take_profit', 0),
                 confidence=raw_data.get('confidence', 0.5),
-
-                # TDI
                 tdi_level=raw_data.get('tdi_level', 50),
                 tdi_zone=raw_data.get('tdi_zone', 'NEUTRAL'),
                 tdi_fast=raw_data.get('tdi_fast', 50),
                 tdi_slow=raw_data.get('tdi_slow', 50),
-
-                # YOUR strategy specific
-                entry_tdi=raw_data.get('entry_tdi', 50),
-                target_tdi=raw_data.get('target_tdi', 50),
-                strategy_type=raw_data.get('strategy_type', 'REVERSAL_TO_TARGET'),
-
-                # BB
+                entry_tdi=raw_data.get('tdi_level', 50),
+                target_tdi=target_tdi,
                 bb_position=raw_data.get('bb_position', 0.5),
                 bb_touch_lower=raw_data.get('touch_lower', False),
                 bb_touch_upper=raw_data.get('touch_upper', False),
-
-                # MACD
                 macd_bullish=raw_data.get('macd_bullish', False),
                 macd_bearish=raw_data.get('macd_bearish', False),
                 macd_histogram=raw_data.get('macd_histogram', 0.0),
-
-                # Conditions
                 conditions_met=raw_data.get('conditions_met', 0),
                 conditions_total=raw_data.get('conditions_total', 4),
                 condition_1_tdi_zone=raw_data.get('condition_1_tdi_zone', False),
                 condition_2_tdi_cross=raw_data.get('condition_2_tdi_cross', False),
                 condition_3_bb_touch=raw_data.get('condition_3_bb_touch', False),
                 condition_4_candles_shrinking=raw_data.get('condition_4_candles_shrinking', False),
-
-                # Quality
                 quality_score=quality_score,
                 total_score=quality_score,
                 grade=grade,
-
-                # Risk
                 rrr=raw_data.get('rrr', 0),
                 signal_strength=raw_data.get('signal_strength', 'SOFT'),
                 risk_multiplier=raw_data.get('risk_multiplier', 1.0),
-
+                ai_decision=raw_data.get('ai_decision', 'PENDING'),
+                ai_confidence=raw_data.get('ai_confidence', 0.0),
+                ai_reasoning=raw_data.get('ai_reasoning', ''),
                 raw_data=raw_data,
                 max_hold_minutes=self.MAX_HOLD_MINUTES,
                 highest_price=entry_price,
                 lowest_price=entry_price,
             )
 
-            # Save to DB
+            # ===== STEP 4: Save to database with upsert =====
+            doc_id = None
             if self.db_enabled and convert_numpy_types:
                 try:
                     signal_dict = signal.to_dict()
-                    # Convert numpy types before saving
                     signal_dict = convert_numpy_types(signal_dict)
-                    doc_id = self._save_to_db(signal_dict)
+                    doc_id = self.db_client.save_signal_upsert(signal_dict)
                     if doc_id:
                         signal.db_doc_id = doc_id
                         raw_data['db_doc_id'] = doc_id
+                        logger.info(f"{EMOJI['DB']} Saved to DB: {doc_id}")
                 except Exception as e:
                     logger.warning(f"{EMOJI['WARNING']} Failed to save signal to DB: {e}")
 
+            # ===== STEP 5: Add to memory =====
             self.active_signals[symbol] = signal
             self.symbol_last_signal[symbol] = datetime.now()
             self.symbol_signal_count[symbol] = self.symbol_signal_count.get(symbol, 0) + 1
@@ -339,7 +434,7 @@ class SignalManager:
             logger.info(
                 f"{EMOJI['LOCK']} {signal_type} {symbol} @ {entry_price:.4f} | "
                 f"TDI: {signal.entry_tdi:.1f} → Target: {signal.target_tdi:.1f} | "
-                f"Grade: {grade} | Score: {quality_score}"
+                f"Grade: {grade} | DB: {signal.db_doc_id or 'N/A'}"
             )
             return True
 
@@ -349,29 +444,9 @@ class SignalManager:
             traceback.print_exc()
             return False
 
-    def _save_to_db(self, signal_data: Dict) -> Optional[str]:
-        if not self.db_enabled:
-            return None
-        try:
-            return self.db_client.save_signal(signal_data)
-        except Exception as e:
-            logger.warning(f"{EMOJI['WARNING']} Failed to save signal: {e}")
-            return None
-
-    def get_all_active_signals(self) -> Dict[str, SignalData]:
-        return self.active_signals.copy()
-
     def check_active_signal(self, symbol: str, current_price: float,
                            last_candle: Dict) -> Tuple[str, float, Optional[SignalData]]:
-        """
-        Check active signal - ALIGNED WITH YOUR ACTUAL STRATEGY.
-
-        YOUR EXIT RULES:
-        - BUY: Exit when TDI reaches 70.0
-        - SELL: Exit when TDI reaches 30.0
-        - TP/SL: Always priority
-        - Max hold: Force exit
-        """
+        """Check active signal - ALIGNED WITH YOUR STRATEGY."""
         if symbol not in self.active_signals:
             return "NO_SIGNAL", 0, None
 
@@ -391,7 +466,7 @@ class SignalManager:
         if age_minutes < self.MIN_HOLD_MINUTES:
             return "ACTIVE", current_price - signal.entry_price, signal
 
-        # ===== RULE 1: CHECK STOP LOSS (HIGHEST PRIORITY) =====
+        # ===== RULE 1: STOP LOSS (HIGHEST PRIORITY) =====
         if signal.signal_type == "BUY":
             if current_price <= signal.stop_loss:
                 updated = self._unlock_symbol(symbol, TradeLifecycle.LOSS, current_price)
@@ -403,7 +478,7 @@ class SignalManager:
                 logger.info(f"{EMOJI['LOSS']} {symbol}: SL HIT at ${current_price:.4f}")
                 return TradeLifecycle.LOSS.value, signal.entry_price - current_price, updated
 
-        # ===== RULE 2: CHECK TAKE PROFIT =====
+        # ===== RULE 2: TAKE PROFIT =====
         if signal.signal_type == "BUY":
             if current_price >= signal.take_profit:
                 updated = self._unlock_symbol(symbol, TradeLifecycle.PROFIT, current_price)
@@ -415,31 +490,26 @@ class SignalManager:
                 logger.info(f"{EMOJI['PROFIT']} {symbol}: TP HIT at ${current_price:.4f}")
                 return TradeLifecycle.PROFIT.value, signal.entry_price - current_price, updated
 
-        # ===== RULE 3: TDI TARGET EXIT (YOUR STRATEGY) =====
-        # Get current TDI from last_candle
+        # ===== RULE 3: TDI TARGET EXIT =====
         current_tdi = last_candle.get('tdi_slow_ma', signal.tdi_level)
 
         if signal.signal_type == "BUY":
-            # BUY: Entered below 50, exit when TDI reaches 70
             if current_tdi >= self.BUY_EXIT_TARGET:
                 updated = self._unlock_symbol(symbol, TradeLifecycle.EXIT_TARGET, current_price)
-                logger.info(f"{EMOJI['EXIT']} {symbol}: TDI reached {self.BUY_EXIT_TARGET} - EXIT at ${current_price:.4f}")
+                logger.info(f"{EMOJI['EXIT']} {symbol}: TDI reached {self.BUY_EXIT_TARGET} - EXIT")
                 return "EXIT_TARGET", current_price - signal.entry_price, updated
-
-        elif signal.signal_type == "SELL":
-            # SELL: Entered above 50, exit when TDI reaches 30
+        else:
             if current_tdi <= self.SELL_EXIT_TARGET:
                 updated = self._unlock_symbol(symbol, TradeLifecycle.EXIT_TARGET, current_price)
-                logger.info(f"{EMOJI['EXIT']} {symbol}: TDI reached {self.SELL_EXIT_TARGET} - EXIT at ${current_price:.4f}")
+                logger.info(f"{EMOJI['EXIT']} {symbol}: TDI reached {self.SELL_EXIT_TARGET} - EXIT")
                 return "EXIT_TARGET", signal.entry_price - current_price, updated
 
-        # ===== RULE 4: MAX HOLD REACHED =====
+        # ===== RULE 4: MAX HOLD =====
         if age_minutes >= signal.max_hold_minutes:
             updated = self._unlock_symbol(symbol, TradeLifecycle.EXIT_1H, current_price)
-            logger.info(f"{EMOJI['EXIT']} {symbol}: MAX HOLD ({age_minutes:.1f}min) - EXIT at ${current_price:.4f}")
+            logger.info(f"{EMOJI['EXIT']} {symbol}: MAX HOLD ({age_minutes:.1f}min) - EXIT")
             return "EXIT_1H", current_price - signal.entry_price, updated
 
-        # ===== ACTIVE =====
         return "ACTIVE", current_price - signal.entry_price, signal
 
     def _unlock_symbol(self, symbol: str, status: TradeLifecycle, exit_price: float) -> Optional[SignalData]:
@@ -475,9 +545,10 @@ class SignalManager:
                 update_data = signal.to_dict()
                 if convert_numpy_types:
                     update_data = convert_numpy_types(update_data)
-                self._update_in_db(signal.db_doc_id, status_str, update_data)
+                self.db_client.move_to_resolved(signal.db_doc_id, update_data)
+                logger.info(f"{EMOJI['DB']} Moved to resolved: {signal.db_doc_id}")
             except Exception as e:
-                logger.warning(f"{EMOJI['WARNING']} Failed to update signal in DB: {e}")
+                logger.warning(f"{EMOJI['WARNING']} Failed to update DB: {e}")
 
         self.signal_history.append(signal)
         if len(self.signal_history) > self.max_history:
@@ -489,34 +560,20 @@ class SignalManager:
         logger.info(
             f"{EMOJI['UNLOCK']} {symbol}: {status_str} | "
             f"PnL: ${signal.pnl:.2f} ({signal.pnl_percent:.2f}%) | "
-            f"Hold: {hold_minutes:.1f}min | "
-            f"TDI: {signal.entry_tdi:.1f} → {signal.tdi_level:.1f}"
+            f"Hold: {hold_minutes:.1f}min"
         )
         return signal
 
-    def _update_in_db(self, doc_id: str, status: str, update_data: Dict) -> bool:
-        if not self.db_enabled or not doc_id:
-            return False
-        try:
-            return self.db_client.update_signal_status(doc_id, status, update_data)
-        except Exception as e:
-            logger.warning(f"{EMOJI['WARNING']} Failed to update signal: {e}")
-            return False
+    def get_all_active_signals(self) -> Dict[str, SignalData]:
+        return self.active_signals.copy()
 
     def get_stats(self) -> Dict:
-        """Get signal manager statistics."""
-        active_count = len(self.active_signals)
         return {
-            "active": active_count,
+            "active": len(self.active_signals),
             "history": len(self.signal_history),
             "active_symbols": list(self.active_signals.keys()),
-            "exit_rules": {
-                "max_hold_minutes": self.MAX_HOLD_MINUTES,
-                "min_hold_minutes": self.MIN_HOLD_MINUTES,
-                "buy_exit_target": self.BUY_EXIT_TARGET,
-                "sell_exit_target": self.SELL_EXIT_TARGET,
-            },
-            "version": "3.4.4"
+            "db_enabled": self.db_enabled,
+            "version": "3.4.5"
         }
 
 
