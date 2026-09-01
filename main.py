@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-AI Trading Bot v3.4.5 - Main Entry Point
+AI Trading Bot v3.4.1 - Main Entry Point
 Super TDI + MACD + Super Bollinger Bands Strategy
 ALIGNED WITH MANUAL STRATEGY: RSI (TDI) primary + MACD secondary + BB entry
-FIXED: Duplicate prevention and signal recovery
+FIXED: UnboundLocalError and duplicate prevention
 """
 
 import os
@@ -17,7 +17,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
-import signal
+import signal as signal_module  # ← FIXED: Import as different name
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -70,6 +70,7 @@ EMOJI = {
     "BB": "📊", "MACD": "📊", "CANDLE": "🕯️", "CHEAT": "📋",
     "EXIT": "⏰", "RESTORE": "♻️", "ACTIVE": "🔴",
 }
+
 
 # ========== GLOBAL STATE ==========
 
@@ -275,40 +276,40 @@ def process_symbol(symbol: str) -> Optional[Dict[str, Any]]:
 
         # ===== STEP 3: Process signal =====
         signal_engine = SignalEngine(use_ai=ai_analyzer.enabled if ai_analyzer else False)
-        signal = signal_engine.process(df, symbol, htf_df=htf_df)
+        signal_data = signal_engine.process(df, symbol, htf_df=htf_df)  # ← Renamed to signal_data
 
-        if signal is None or signal.get('signal') == 'NO_TRADE':
+        if signal_data is None or signal_data.get('signal') == 'NO_TRADE':
             return None
 
         # Get current price
         current_price = data_client.fetch_current_price(symbol)
         if current_price:
-            signal['entry_price'] = current_price
+            signal_data['entry_price'] = current_price
         elif not df.empty:
-            signal['entry_price'] = df['close'].iloc[-1]
+            signal_data['entry_price'] = df['close'].iloc[-1]
 
         # ===== STEP 4: Check conditions =====
-        condition_check = check_conditions(signal)
+        condition_check = check_conditions(signal_data)
 
-        signal['conditions_met'] = condition_check['conditions_met']
-        signal['conditions_total'] = condition_check['conditions_total']
-        signal['condition_1_tdi_zone'] = condition_check['conditions'].get('condition_1_tdi_zone', False)
-        signal['condition_2_tdi_cross'] = condition_check['conditions'].get('condition_2_tdi_cross', False)
-        signal['condition_3_bb_touch'] = condition_check['conditions'].get('condition_3_bb_touch', False)
-        signal['condition_4_candles_shrinking'] = condition_check['conditions'].get('condition_4_candles_shrinking', False)
-        signal['condition_5_reversal_confirm'] = condition_check['conditions'].get('condition_5_reversal_confirm', False)
+        signal_data['conditions_met'] = condition_check['conditions_met']
+        signal_data['conditions_total'] = condition_check['conditions_total']
+        signal_data['condition_1_tdi_zone'] = condition_check['conditions'].get('condition_1_tdi_zone', False)
+        signal_data['condition_2_tdi_cross'] = condition_check['conditions'].get('condition_2_tdi_cross', False)
+        signal_data['condition_3_bb_touch'] = condition_check['conditions'].get('condition_3_bb_touch', False)
+        signal_data['condition_4_candles_shrinking'] = condition_check['conditions'].get('condition_4_candles_shrinking', False)
+        signal_data['condition_5_reversal_confirm'] = condition_check['conditions'].get('condition_5_reversal_confirm', False)
 
         # ===== STEP 5: AI Decision =====
-        ai_decision = signal.get('ai_decision', 'NONE')
+        ai_decision = signal_data.get('ai_decision', 'NONE')
 
         # ===== STEP 6: Build cheat sheet =====
         cheat_sheet_obj = SignalCheatSheet()
-        if signal.get('direction') == 'BUY':
-            signal['cheat_sheet'] = cheat_sheet_obj.generate_buy_cheat_sheet(signal)
-        elif signal.get('direction') == 'SELL':
-            signal['cheat_sheet'] = cheat_sheet_obj.generate_sell_cheat_sheet(signal)
+        if signal_data.get('direction') == 'BUY':
+            signal_data['cheat_sheet'] = cheat_sheet_obj.generate_buy_cheat_sheet(signal_data)
+        elif signal_data.get('direction') == 'SELL':
+            signal_data['cheat_sheet'] = cheat_sheet_obj.generate_sell_cheat_sheet(signal_data)
         else:
-            signal['cheat_sheet'] = cheat_sheet_obj.generate_wait_cheat_sheet(signal)
+            signal_data['cheat_sheet'] = cheat_sheet_obj.generate_wait_cheat_sheet(signal_data)
 
         # ===== STEP 7: Lock symbol if valid =====
         if condition_check['valid']:
@@ -320,9 +321,9 @@ def process_symbol(symbol: str) -> Optional[Dict[str, Any]]:
 
                 if signal_manager.lock_symbol(
                     symbol=symbol,
-                    signal_type=signal.get('direction', 'UNKNOWN'),
-                    entry_price=signal.get('entry_price', df['close'].iloc[-1] if not df.empty else 0),
-                    raw_data=signal,
+                    signal_type=signal_data.get('direction', 'UNKNOWN'),
+                    entry_price=signal_data.get('entry_price', df['close'].iloc[-1] if not df.empty else 0),
+                    raw_data=signal_data,
                 ):
                     bot_stats['signals_generated'] += 1
                     if ai_decision == 'APPROVE':
@@ -333,21 +334,21 @@ def process_symbol(symbol: str) -> Optional[Dict[str, Any]]:
                         try:
                             telegram_bot.send_signal(
                                 symbol=symbol,
-                                signal_type=signal.get('direction', 'UNKNOWN'),
-                                entry_price=signal.get('entry_price', 0),
-                                stop_loss=signal.get('stop_loss', 0),
-                                take_profit=signal.get('take_profit', 0),
-                                confidence=signal.get('confidence', 0.7),
+                                signal_type=signal_data.get('direction', 'UNKNOWN'),
+                                entry_price=signal_data.get('entry_price', 0),
+                                stop_loss=signal_data.get('stop_loss', 0),
+                                take_profit=signal_data.get('take_profit', 0),
+                                confidence=signal_data.get('confidence', 0.7),
                                 ai_decision=ai_decision,
-                                ai_confidence=signal.get('ai_confidence', 0.8),
-                                ai_reasoning=signal.get('ai_reasoning', ''),
-                                rrr=signal.get('rrr', 2.0),
-                                total_score=signal.get('quality_score', 75),
-                                grade=signal.get('grade', 'B'),
-                                signal_strength=signal.get('signal_strength', 'SOFT'),
-                                risk_multiplier=signal.get('risk_multiplier', 1.0),
-                                tdi_level=signal.get('tdi_level', 50),
-                                tdi_zone=signal.get('tdi_zone', 'NEUTRAL'),
+                                ai_confidence=signal_data.get('ai_confidence', 0.8),
+                                ai_reasoning=signal_data.get('ai_reasoning', ''),
+                                rrr=signal_data.get('rrr', 2.0),
+                                total_score=signal_data.get('quality_score', 75),
+                                grade=signal_data.get('grade', 'B'),
+                                signal_strength=signal_data.get('signal_strength', 'SOFT'),
+                                risk_multiplier=signal_data.get('risk_multiplier', 1.0),
+                                tdi_level=signal_data.get('tdi_level', 50),
+                                tdi_zone=signal_data.get('tdi_zone', 'NEUTRAL'),
                                 conditions_met=condition_check['conditions_met'],
                                 conditions_total=condition_check['conditions_total'],
                                 condition_1_tdi_zone=condition_check['conditions'].get('condition_1_tdi_zone', False),
@@ -355,41 +356,41 @@ def process_symbol(symbol: str) -> Optional[Dict[str, Any]]:
                                 condition_3_bb_touch=condition_check['conditions'].get('condition_3_bb_touch', False),
                                 condition_4_candles_shrinking=condition_check['conditions'].get('condition_4_candles_shrinking', False),
                                 condition_5_reversal_confirm=condition_check['conditions'].get('condition_5_reversal_confirm', False),
-                                divergence_detected=signal.get('divergence_detected', False),
-                                candle_pattern=signal.get('candle_pattern', 'NONE'),
-                                sr_confirmed=signal.get('sr_confirmed', False),
-                                bb_squeeze=signal.get('bb_squeeze', False),
-                                session=signal.get('session', 'UNKNOWN'),
-                                macd_bullish=signal.get('macd_bullish', False),
-                                macd_histogram=signal.get('macd_histogram', 0.0),
-                                cheat_sheet=signal.get('cheat_sheet', ''),
+                                divergence_detected=signal_data.get('divergence_detected', False),
+                                candle_pattern=signal_data.get('candle_pattern', 'NONE'),
+                                sr_confirmed=signal_data.get('sr_confirmed', False),
+                                bb_squeeze=signal_data.get('bb_squeeze', False),
+                                session=signal_data.get('session', 'UNKNOWN'),
+                                macd_bullish=signal_data.get('macd_bullish', False),
+                                macd_histogram=signal_data.get('macd_histogram', 0.0),
+                                cheat_sheet=signal_data.get('cheat_sheet', ''),
                                 max_hold_minutes=60,
                             )
                         except Exception as e:
                             logger.warning(f"Telegram error for {symbol}: {e}")
 
                     # Print cheat sheet
-                    cheat_sheet = signal.get('cheat_sheet', '')
+                    cheat_sheet = signal_data.get('cheat_sheet', '')
                     if cheat_sheet:
                         print("\n" + "=" * 70)
                         print(cheat_sheet)
                         if ai_decision == 'APPROVE':
-                            print(f"\n🤖 AI Decision: {ai_decision} (Confidence: {signal.get('ai_confidence', 0.8)*100:.0f}%)")
-                        macd_bullish = signal.get('macd_bullish', False)
-                        macd_histogram = signal.get('macd_histogram', 0.0)
+                            print(f"\n🤖 AI Decision: {ai_decision} (Confidence: {signal_data.get('ai_confidence', 0.8)*100:.0f}%)")
+                        macd_bullish = signal_data.get('macd_bullish', False)
+                        macd_histogram = signal_data.get('macd_histogram', 0.0)
                         print(f"\n📊 MACD: {'BULLISH ✅' if macd_bullish else 'NEUTRAL'} (Histogram: {macd_histogram:.4f})")
                         print("=" * 70 + "\n")
 
-                    logger.info(f"{EMOJI['SIGNAL']} {signal.get('direction')} {symbol} @ {signal.get('entry_price', 0):.4f} | Conditions: {condition_check['conditions_met']}/{condition_check['conditions_total']} | AI: {ai_decision} | Grade: {signal.get('grade', 'C')} | Score: {signal.get('quality_score', 0)}")
-                    return signal
+                    logger.info(f"{EMOJI['SIGNAL']} {signal_data.get('direction')} {symbol} @ {signal_data.get('entry_price', 0):.4f} | Conditions: {condition_check['conditions_met']}/{condition_check['conditions_total']} | AI: {ai_decision} | Grade: {signal_data.get('grade', 'C')} | Score: {signal_data.get('quality_score', 0)}")
+                    return signal_data
 
             elif ai_decision == 'REJECT':
                 bot_stats['ai_rejected'] += 1
-                logger.info(f"{EMOJI['REJECT']} AI REJECTED: {symbol} - {signal.get('ai_reasoning', 'No reason')}")
+                logger.info(f"{EMOJI['REJECT']} AI REJECTED: {symbol} - {signal_data.get('ai_reasoning', 'No reason')}")
 
             elif ai_decision == 'WAIT':
                 bot_stats['ai_waited'] += 1
-                logger.info(f"{EMOJI['WAIT']} AI WAIT: {symbol} - {signal.get('ai_reasoning', 'No reason')}")
+                logger.info(f"{EMOJI['WAIT']} AI WAIT: {symbol} - {signal_data.get('ai_reasoning', 'No reason')}")
         else:
             logger.debug(f"{EMOJI['REJECT']} {symbol}: Only {condition_check['conditions_met']}/{condition_check['conditions_total']} conditions met")
 
@@ -415,7 +416,7 @@ def check_active_signals():
         return
 
     # Monitor each active signal
-    for symbol, signal in active.items():
+    for symbol, signal_obj in active.items():  # ← Renamed to signal_obj to avoid conflict
         try:
             current_price = data_client.fetch_current_price(symbol)
             if current_price is None:
@@ -460,8 +461,8 @@ def check_active_signals():
                     try:
                         telegram_bot.send_result(
                             symbol=symbol,
-                            signal_type=signal.signal_type,
-                            entry_price=signal.entry_price,
+                            signal_type=signal_obj.signal_type,
+                            entry_price=signal_obj.entry_price,
                             exit_price=current_price,
                             pnl=updated.pnl,
                             pnl_percent=updated.pnl_percent,
@@ -610,9 +611,9 @@ def main():
     logger.info(f"📊 HTF Alignment Required: {'✅' if htf_required else '❌'} (DISABLED - Context Only)")
     logger.info("=" * 70)
 
-    # Setup signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    # Setup signal handlers - FIXED: Use signal_module instead of signal
+    signal_module.signal(signal_module.SIGINT, signal_handler)
+    signal_module.signal(signal_module.SIGTERM, signal_handler)
 
     # Start health server
     threading.Thread(target=run_health_server, daemon=True).start()
@@ -624,8 +625,8 @@ def main():
     active = signal_manager.get_all_active_signals()
     if active:
         logger.info(f"{EMOJI['ACTIVE']} Active signals: {len(active)}")
-        for symbol, signal in active.items():
-            logger.info(f"  {symbol}: entry={signal.entry_price:.4f}, age={signal.get_age_minutes():.1f}min, doc={signal.db_doc_id}")
+        for symbol, signal_obj in active.items():  # ← Renamed to signal_obj
+            logger.info(f"  {symbol}: entry={signal_obj.entry_price:.4f}, age={signal_obj.get_age_minutes():.1f}min, doc={signal_obj.db_doc_id}")
 
     # Symbols to monitor
     symbols = config.market.symbols
@@ -633,8 +634,6 @@ def main():
 
     # Send startup message
     if telegram_bot.enabled:
-        ai_status = "✅" if ai_analyzer.enabled else "❌"
-        db_status = "✅" if mongodb_client.is_available() else "❌"
         telegram_bot.send_startup_message(
             symbols=symbols,
             config_info={
