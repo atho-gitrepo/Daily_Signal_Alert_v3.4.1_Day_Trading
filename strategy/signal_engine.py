@@ -3,7 +3,7 @@ Signal Engine - Super TDI + MACD + Super Bollinger Bands
 ALIGNED WITH YOUR ACTUAL STRATEGY:
 - BUY: Enter below 50 → Exit at 70
 - SELL: Enter above 50 → Exit at 30
-Version: 3.4.4 - FIXED: Exit targets (70 for BUY, 30 for SELL)
+Version: 3.4.1 - FIXED: Exit targets (70 for BUY, 30 for SELL)
 """
 
 import pandas as pd
@@ -58,13 +58,13 @@ class SignalEngine:
         self.min_quality_score = getattr(config.strategy, 'min_quality_score', 50)
 
         # Exit parameters
-        self.max_hold_minutes = 60  # Max hold
+        self.max_hold_minutes = 120  # Max hold
         self.extension_minutes = 30  # Extra hold if breakout
 
         # Grade thresholds
         self.grade_a_threshold = getattr(config.strategy, 'grade_a_threshold', 80)
         self.grade_b_threshold = getattr(config.strategy, 'grade_b_threshold', 60)
-        self.grade_c_threshold = getattr(config.strategy, 'grade_c_threshold', 50)
+        self.grade_c_threshold = getattr(config.strategy, 'grade_c_threshold', 55)
 
         logger.info(f"🔧 Signal Engine v3.4.1 initialized - AI: {'✅' if self.use_ai else '❌'}")
         logger.info(f"   RRR Range: {self.min_rrr} - {self.max_rrr}")
@@ -415,7 +415,7 @@ class SignalEngine:
             'ai_analysis': {},
             # Exit tracking
             'tdi_target_reached': False,
-            'max_hold_minutes': 60,
+            'max_hold_minutes': 120,
         }
 
     def _calculate_quality_score(self, tdi_data: Dict, bb_data: Dict, macd_data: Dict, direction: str) -> int:
@@ -457,7 +457,7 @@ class SignalEngine:
             return "B+"
         elif score >= 60:
             return "B"
-        elif score >= 50:
+        elif score >= 55:
             return "C"
         else:
             return "D"
@@ -484,7 +484,7 @@ class SignalEngine:
             lines.append("")
             lines.append("⏰ <b>Exit Rules:</b>")
             lines.append(f"• Exit when TDI reaches <b>{target_tdi:.1f}</b> (Soft Sell zone)")
-            lines.append("• Max hold: 60 minutes")
+            lines.append("• Max hold: 120 minutes")
 
         else:  # SELL
             lines.append(f"📊 TDI Entry: <b>{tdi_level:.1f}</b> (above 50 - Seller Zone)")
@@ -496,7 +496,7 @@ class SignalEngine:
             lines.append("")
             lines.append("⏰ <b>Exit Rules:</b>")
             lines.append(f"• Exit when TDI reaches <b>{target_tdi:.1f}</b> (Soft Buy zone)")
-            lines.append("• Max hold: 60 minutes")
+            lines.append("• Max hold: 120 minutes")
 
         # Trade details
         lines.append("")
@@ -579,7 +579,7 @@ class SignalEngine:
     def get_stats(self) -> Dict[str, Any]:
         """Get engine statistics."""
         return {
-            'version': '3.4.4',
+            'version': '3.4.1',
             'strategy': 'Trade Across the Range',
             'buy_exit_target': self.BUY_EXIT_TARGET,
             'sell_exit_target': self.SELL_EXIT_TARGET,
