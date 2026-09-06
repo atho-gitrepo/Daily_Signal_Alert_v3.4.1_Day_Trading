@@ -116,8 +116,8 @@ class SignalData:
 
     raw_data: Dict = field(default_factory=dict)
     bar_count: int = 0
-    max_hold_minutes: int = 60
-    min_hold_minutes: int = 15
+    max_hold_minutes: int = 120
+    min_hold_minutes: int = 45
     highest_price: Optional[float] = None
     lowest_price: Optional[float] = None
     db_doc_id: Optional[str] = None
@@ -189,16 +189,16 @@ class SignalManager:
         self.MAX_SIGNALS_PER_HOUR = 8
 
         # Exit settings (YOUR STRATEGY)
-        self.MAX_HOLD_MINUTES = 60
-        self.MIN_HOLD_MINUTES = 15
+        self.MAX_HOLD_MINUTES = 120
+        self.MIN_HOLD_MINUTES = 45
         self.BUY_EXIT_TARGET = 70.0
         self.SELL_EXIT_TARGET = 30.0
 
         # Grade thresholds
         self.GRADE_A_THRESHOLD = 80
         self.GRADE_B_THRESHOLD = 60
-        self.GRADE_C_THRESHOLD = 50
-        self.MIN_SIGNAL_SCORE = 50
+        self.GRADE_C_THRESHOLD = 55
+        self.MIN_SIGNAL_SCORE = 55
 
         self.db_client = db_client
         self.db_enabled = self.db_client is not None and self.db_client.is_available() if self.db_client is not None else False
