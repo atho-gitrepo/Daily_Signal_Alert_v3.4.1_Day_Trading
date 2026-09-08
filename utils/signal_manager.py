@@ -5,7 +5,7 @@ ALIGNED WITH YOUR MANUAL STRATEGY:
 - EXIT: BUY → TDI 70, SELL → TDI 30
 - TP/SL: Always priority
 - Max hold: Force exit
-Version: 3.4.5 - FIXED: Duplicate prevention with database sync
+Version: 3.4.1 - FIXED: Duplicate prevention with database sync
 """
 
 import logging
@@ -116,7 +116,7 @@ class SignalData:
 
     raw_data: Dict = field(default_factory=dict)
     bar_count: int = 0
-    max_hold_minutes: int = 120
+    max_hold_minutes: int = 60
     min_hold_minutes: int = 45
     highest_price: Optional[float] = None
     lowest_price: Optional[float] = None
@@ -189,7 +189,7 @@ class SignalManager:
         self.MAX_SIGNALS_PER_HOUR = 8
 
         # Exit settings (YOUR STRATEGY)
-        self.MAX_HOLD_MINUTES = 120
+        self.MAX_HOLD_MINUTES = 60
         self.MIN_HOLD_MINUTES = 45
         self.BUY_EXIT_TARGET = 70.0
         self.SELL_EXIT_TARGET = 30.0
@@ -203,7 +203,7 @@ class SignalManager:
         self.db_client = db_client
         self.db_enabled = self.db_client is not None and self.db_client.is_available() if self.db_client is not None else False
 
-        logger.info(f"✅ SIGNAL_MANAGER v3.4.5: Initialized")
+        logger.info(f"✅ SIGNAL_MANAGER v3.4.1: Initialized")
         logger.info(f"  - Strategy: BUY → TDI 70, SELL → TDI 30")
         logger.info(f"  - Max Hold: {self.MAX_HOLD_MINUTES} minutes")
         logger.info(f"  - DB Enabled: {self.db_enabled}")
@@ -573,7 +573,7 @@ class SignalManager:
             "history": len(self.signal_history),
             "active_symbols": list(self.active_signals.keys()),
             "db_enabled": self.db_enabled,
-            "version": "3.4.5"
+            "version": "3.4.1"
         }
 
 
