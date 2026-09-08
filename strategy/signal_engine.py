@@ -58,7 +58,7 @@ class SignalEngine:
         self.min_quality_score = getattr(config.strategy, 'min_quality_score', 50)
 
         # Exit parameters
-        self.max_hold_minutes = 120  # Max hold
+        self.max_hold_minutes = 60  # Max hold
         self.extension_minutes = 30  # Extra hold if breakout
 
         # Grade thresholds
@@ -496,7 +496,7 @@ class SignalEngine:
             lines.append("")
             lines.append("⏰ <b>Exit Rules:</b>")
             lines.append(f"• Exit when TDI reaches <b>{target_tdi:.1f}</b> (Soft Buy zone)")
-            lines.append("• Max hold: 120 minutes")
+            lines.append("• Max hold: 60 minutes")
 
         # Trade details
         lines.append("")
